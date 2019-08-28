@@ -26,14 +26,12 @@
     "@types/shortid": "0.0.29",
     "@types/spark-md5": "^3.0.1",
     "@types/uuid": "^3.4.5",
+    "ankisync": "^1.0.0",
+    "es6-json-stable-stringify": "^2.0.2",
     "moment": "^2.24.0",
     "q2filter": "^0.1.4",
     "shortid": "^2.2.14",
     "spark-md5": "^3.0.0",
     "uuid": "^3.3.3"
-  },
-  "devDependencies": {
-    "ankisync": "file:../ankisync.js",
-    "es6-json-stable-stringify": "^2.0.2"
   }
 }
