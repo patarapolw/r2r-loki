@@ -7,7 +7,7 @@ import QParser from "q2filter";
 import uuid from "uuid/v4";
 import shortid from "shortid";
 import { shuffle, ankiMustache, chunk } from "./util";
-import stringify from "es6-json-stable-stringify";
+import stringify from "fast-json-stable-stringify";
 import Anki from "ankisync";
 
 FSStorage.register();
