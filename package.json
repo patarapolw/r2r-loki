@@ -1,6 +1,6 @@
 {
   "name": "@rep2recall/r2r",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "R2r format engine for Rep2Recall",
   "main": "dist/index.js",
   "scripts": {
@@ -37,5 +37,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@types/mocha": "^5.2.7"
   }
 }

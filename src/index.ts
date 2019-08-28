@@ -5,7 +5,6 @@ import SparkMD5 from "spark-md5";
 import { srsMap, getNextReview, repeatReview } from "./quiz";
 import QParser from "q2filter";
 import uuid from "uuid/v4";
-import shortid from "shortid";
 import { shuffle, ankiMustache, chunk } from "./util";
 import stringify from "fast-json-stable-stringify";
 import Anki from "ankisync";
@@ -24,7 +23,8 @@ export interface IDbSource {
 }
 
 export interface IDbTemplate {
-    name: string;  // name as _id
+    key?: string;  // key as _id
+    name: string;
     sourceId: string;
     front: string;
     back?: string;
@@ -33,14 +33,15 @@ export interface IDbTemplate {
 }
 
 export interface IDbNote {
-    key: string;  // key as _id
+    key?: string;  // key as _id
+    name: string;
     sourceId?: string;
     data: Record<string, any>;
     order: Record<string, number>;
 }
 
 export interface IDbMedia {
-    h: string;  // h as _id
+    h?: string;  // h as _id
     sourceId?: string;
     name: string;
     data: Buffer;
@@ -82,10 +83,9 @@ export interface IEntry {
     tBack?: string;
     css?: string;
     js?: string;
-    key?: string;
     data?: { key: string, value: any }[];
     source?: string;
-    sH?: string;
+    sourceH?: string;
     sCreated?: string;
 }
 
@@ -149,9 +149,16 @@ export default class R2r {
         this.template = this.loki.getCollection("template");
         if (this.template === null) {
             this.template = this.loki.addCollection("template", {
-                unique: ["name"]
+                unique: ["key"]
             });
         }
+
+        const tHook = (t: IDbTemplate) => {
+            t.key = this.getTemplateId(t);
+        };
+
+        this.template.on("pre-insert", tHook);
+        this.template.on("pre-update", tHook);
 
         this.note = this.loki.getCollection("note");
         if (this.note === null) {
@@ -160,16 +167,39 @@ export default class R2r {
             });
         }
 
+        const nHook = (n: IDbNote) => {
+            n.key = this.getNoteId(n);
+        };
+
+        this.note.on("pre-insert", nHook);
+        this.note.on("pre-update", nHook);
+
         this.media = this.loki.getCollection("media");
         if (this.media === null) {
             this.media = this.loki.addCollection("media", {
                 unique: ["h"]
             });
         }
+
+        const mHook = (m: IDbMedia) => {
+            m.h = SparkMD5.ArrayBuffer.hash(m.data);
+        };
+
+        this.note.on("pre-insert", nHook);
+        this.note.on("pre-update", nHook);
     }
 
     public async close() {
         await this.loki.close();
+    }
+
+    public getTemplateId(t: IDbTemplate) {
+        const {front, back, css, js} = t;
+        return SparkMD5.hash(stringify({front, back, css, js}));
+    }
+
+    public getNoteId(n: IDbNote) {
+        return SparkMD5.hash(stringify(n.data));
     }
 
     public parseCond(
@@ -294,19 +324,19 @@ export default class R2r {
     public insertMany(entries: IEntry[]): string[] {
         entries = entries.map((e) => this.transformCreateOrUpdate(null, e)) as IEntry[];
 
-        const eValidSource = entries.filter((e) => e.sH);
+        const eValidSource = entries.filter((e) => e.sourceH);
         const now = new Date().toISOString();
 
         let sourceH: string = "";
         for (const e of eValidSource.filter((e, i) => {
-            return eValidSource.map((e1) => e1.sH).indexOf(e.sH) === i
+            return eValidSource.map((e1) => e1.sourceH).indexOf(e.sourceH) === i
         })) {
-            sourceH = e.sH!;
+            sourceH = e.sourceH!;
             try {
                 this.source.insertOne({
                     name: e.source!,
                     created: e.sCreated || now,
-                    h: e.sH!
+                    h: e.sourceH!
                 })
             } catch (err) { }
         }
@@ -324,24 +354,26 @@ export default class R2r {
                     sourceId: sourceH
                 });
             } catch (e) { }
-        })
+        });
 
         const eValidNote = entries.filter((e) => e.data);
 
-        eValidNote.map((e) => {
+        eValidNote.map((el) => {
             const data: Record<string, any> = {};
             const order: Record<string, number> = {};
 
             let index = 1;
-            for (const { key, value } of e.data!) {
+            for (const { key, value } of el.data!) {
                 data[key] = value;
                 order[key] = index
                 index++;
             }
 
+            (el as any).key = SparkMD5.hash(stringify(data));
+
             try {
                 this.note.insertOne({
-                    key: e.key!,
+                    name: `${sourceH}/${el.template}/${el.data![0].value}`,
                     data,
                     order,
                     sourceId: sourceH
@@ -358,7 +390,7 @@ export default class R2r {
 
         const cIds: string[] = [];
         this.card.insert(entries.map((e) => {
-            const _id = shortid.generate();
+            const _id = uuid();
             cIds.push(_id);
             return {
                 _id,
@@ -368,7 +400,7 @@ export default class R2r {
                 srsLevel: e.srsLevel,
                 nextReview: e.nextReview,
                 deckId: dMap[e.deck],
-                noteId: e.key,
+                noteId: (e as any).key,
                 templateId: e.template,
                 created: now,
                 tag: e.tag
@@ -556,7 +588,7 @@ export default class R2r {
 
     private getOrCreateDeck(name: string): string {
         try {
-            const _id = shortid.generate();
+            const _id = uuid();
             this.deck.insertOne({ _id, name });
             return _id;
         } catch (e) {
@@ -591,6 +623,73 @@ export default class R2r {
         }
 
         return "";
+    }
+
+    public async fromR2r(r2r: R2r, options?: {filename?: string, callback?: (p: IProgress) => void}) {
+        const filename = options ? options.filename : undefined;
+        const callback = options ? options.callback : undefined;
+
+        if (callback) callback({text: "Reading R2r file"});
+
+        const data = fs.readFileSync(r2r.loki.filename);
+        const sourceH = SparkMD5.ArrayBuffer.hash(data);
+        const now = new Date().toISOString();
+
+        try {
+            this.source.insertOne({
+                name: filename || r2r.loki.filename,
+                h: sourceH,
+                created: now
+            });
+        } catch(e) {
+            if (callback) callback({text: "Duplicated Anki resource"});
+            return;
+        }
+
+        r2r.media.find().forEach((m) => {
+            try {
+                this.media.insertOne({
+                    ...m,
+                    sourceId: sourceH
+                });
+            } catch(e) {}
+        });
+
+        const deckIdMap: Record<string, string> = {};
+
+        r2r.deck.find().forEach((d) => {
+            try {
+                const _id = uuid();
+                this.deck.insertOne({
+                    ...d,
+                    _id
+                });
+                deckIdMap[d.name] = _id;
+            } catch(e) {
+                deckIdMap[d.name] = this.deck.findOne({name: d.name})._id;
+            }
+        });
+
+        r2r.template.find().forEach((t) => {
+            try {
+                this.template.insertOne({
+                    ...t,
+                    name: `${sourceH}/${t.name}`
+                });
+            } catch(e) {}
+        })
+
+        r2r.note.find().forEach((n) => {
+            try {
+                this.note.insertOne(n);
+            } catch(e) {}
+        });
+
+        r2r.card.find().forEach((c) => {
+            try {
+                this.card.insertOne(c);
+            } catch(e) {}
+        });
     }
 
     public async fromAnki(anki: Anki, options?: {filename?: string, callback?: (p: IProgress) => void}) {
@@ -659,16 +758,18 @@ export default class R2r {
                     }
                 }
 
-                const templateId = `${sourceH}/${el.template.model.name}/${el.template.name}`;
+                const t = {
+                    name: `${sourceH}/${el.note.model.name}/${el.template.name}`,
+                    sourceId: sourceH,
+                    front: el.template.qfmt,
+                    back: el.template.afmt,
+                    css: el.note.model.css
+                };
+                const templateId = this.getTemplateId(t);
                 if (!templateIdSet.has(templateId)) {
                     templateIdSet.add(templateId);
                     try {
-                        this.template.insertOne({
-                            name: templateId,
-                            sourceId: sourceH,
-                            front: el.template.qfmt,
-                            back: el.template.afmt
-                        });
+                        this.template.insertOne(t);
                     } catch (e) { }
                 }
 
@@ -678,11 +779,12 @@ export default class R2r {
                     data[k] = el.note.flds[i];
                     order[k] = i;
                 });
-                const key = `${sourceH}/${SparkMD5.hash(stringify(data))}`;
+                const key = SparkMD5.hash(stringify(data));
                 if (!noteIdSet.has(key)) {
                     try {
                         this.note.insertOne({
                             key,
+                            name: `${sourceH}/${el.note.model.name}/${el.template.name}/${el.note.flds[0]}`,
                             data,
                             order
                         });
