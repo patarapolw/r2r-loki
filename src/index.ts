@@ -593,7 +593,10 @@ export default class R2r {
         return "";
     }
 
-    public async fromAnki(anki: Anki, callback?: (p: IProgress) => void) {
+    public async fromAnki(anki: Anki, options?: {filename?: string, callback?: (p: IProgress) => void}) {
+        const filename = options ? options.filename : undefined;
+        const callback = options ? options.callback : undefined;
+
         if (callback) callback({text: "Reading Anki file"});
 
         const data = fs.readFileSync(anki.filePath);
@@ -602,7 +605,7 @@ export default class R2r {
 
         try {
             this.source.insertOne({
-                name: anki.filePath,
+                name: filename || anki.filePath,
                 h: sourceH,
                 created: now
             });
