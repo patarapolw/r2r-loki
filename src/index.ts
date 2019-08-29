@@ -193,6 +193,15 @@ export default class R2r {
         await this.loki.close();
     }
 
+    public reset() {
+        this.source.findAndRemove({});
+        this.media.findAndRemove({});
+        this.template.findAndRemove({});
+        this.note.findAndRemove({});
+        this.card.findAndRemove({});
+        this.deck.findAndRemove({});
+    }
+
     public getTemplateId(t: IDbTemplate) {
         const {front, back, css, js} = t;
         return SparkMD5.hash(stringify({front, back, css, js}));
@@ -292,7 +301,7 @@ export default class R2r {
         }
 
         if (["tFront", "tBack", "template", "model", "css", "js"].some((k) => allFields.has(k))) {
-            query = query.eqJoin(this.template, "templateId", "name", (l, r) => {
+            query = query.eqJoin(this.template, "templateId", "key", (l, r) => {
                 l = cleanLokiObj(l);
                 const { front, back, css, js } = r;
                 return { ...l, tFront: front, tBack: back, css, js };

@@ -1,6 +1,6 @@
 {
   "name": "@rep2recall/r2r",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "R2r format engine for Rep2Recall",
   "main": "dist/index.js",
   "scripts": {
