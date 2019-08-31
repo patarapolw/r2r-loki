@@ -168,7 +168,7 @@ export default class R2r {
         }
 
         const nHook = (n: IDbNote) => {
-            n.key = this.getNoteId(n);
+            n.key = this.getNoteId(n.data);
         };
 
         this.note.on("pre-insert", nHook);
@@ -203,12 +203,12 @@ export default class R2r {
     }
 
     public getTemplateId(t: IDbTemplate) {
-        const {front, back, css, js} = t;
-        return SparkMD5.hash(stringify({front, back, css, js}));
+        const { front, back, css, js } = t;
+        return SparkMD5.hash(stringify({ front, back, css, js }));
     }
 
-    public getNoteId(n: IDbNote) {
-        return SparkMD5.hash(stringify(n.data));
+    public getNoteId(data: Record<string, any>) {
+        return SparkMD5.hash(stringify(data));
     }
 
     public parseCond(
@@ -216,8 +216,8 @@ export default class R2r {
         options: ICondOptions = {}
     ): IPagedOutput<any> {
         const parser = new QParser({
-            anyOf: ["template", "front", "mnemonic", "entry", "deck", "tag"],
-            isString: ["template", "front", "back", "mnemonic", "deck", "tag", "entry"],
+            anyOf: ["template", "front", "mnemonic", "deck", "tag"],
+            isString: ["template", "front", "back", "mnemonic", "deck", "tag"],
             isDate: ["created", "modified", "nextReview"],
             transforms: {
                 "is:due": () => {
@@ -422,9 +422,79 @@ export default class R2r {
     public updateMany(ids: string[], u: Partial<IEntry>) {
         const now = new Date().toISOString();
 
-        return this.card.updateWhere((c0) => ids.includes(c0._id), (c0) => {
-            return Object.assign(c0, this.transformCreateOrUpdate(c0._id, u, now));
+        const cs = this.card.find({ _id: { $in: ids } }).map((c) => {
+            for (const k of Object.keys(c)) {
+                if (!Object.keys(u).includes(k) && k !== "_id") {
+                    delete (c as any)[k];
+                }
+            }
+
+            const c0: any = Object.assign(c, this.transformCreateOrUpdate(c._id!, u, now));
+            const c1: any = { _id: c._id! };
+
+            for (let [k, v] of Object.entries(c0)) {
+                switch (k) {
+                    case "deck":
+                        k = "deckId",
+                            v = this.getOrCreateDeck(v as string);
+                        c1[k] = v;
+                        break;
+                    case "tFront":
+                    case "tBack":
+                        k = k.substr(1).toLocaleLowerCase();
+                    case "css":
+                    case "js":
+                        const templateId = this.card.findOne({ _id: c._id! }).templateId;
+                        this.template.findAndUpdate({ key: templateId }, (t) => {
+                            (t as any)[k] = v;
+                            return t;
+                        });
+                        break;
+                    case "data":
+                        const noteId = this.card.findOne({ _id: c._id! }).noteId;
+                        const n = this.note.findOne({ key: noteId });
+                        if (n) {
+                            const { order, data } = n;
+                            for (const { key, value } of v as any[]) {
+                                if (!order![key]) {
+                                    order![key] = Math.max(...Object.values(order!)) + 1;
+                                }
+                                data![key] = value;
+                            }
+                            this.note.findAndUpdate({ key: noteId }, (n) => {
+                                return Object.assign(n, { order, data });
+                            });
+                        } else {
+                            const order: Record<string, number> = {};
+                            const data: Record<string, any> = {};
+                            for (const { key, value } of v as any[]) {
+                                if (!order[key]) {
+                                    order[key] = Math.max(-1, ...Object.values(order)) + 1;
+                                }
+                                data[key] = value;
+                            }
+
+                            const key = this.getNoteId(data)
+                            const name = `${key}/${Object.values(data)[0]}`;
+                            this.note.insertOne({ key, name, order, data });
+                            c1.noteId = key;
+                        }
+                        break;
+                    default:
+                        c1[k] = v;
+                }
+            }
+
+            return c1;
         });
+
+        for (const c of cs) {
+            if (Object.keys(c).length > 1) {
+                this.card.findAndUpdate({ _id: c._id }, (c0) => {
+                    return Object.assign(c0, c);
+                });
+            }
+        }
     }
 
     public addTags(ids: string[], tags: string[]) {
@@ -634,11 +704,11 @@ export default class R2r {
         return "";
     }
 
-    public async fromR2r(r2r: R2r, options?: {filename?: string, callback?: (p: IProgress) => void}) {
+    public async fromR2r(r2r: R2r, options?: { filename?: string, callback?: (p: IProgress) => void }) {
         const filename = options ? options.filename : undefined;
         const callback = options ? options.callback : undefined;
 
-        if (callback) callback({text: "Reading R2r file"});
+        if (callback) callback({ text: "Reading R2r file" });
 
         const data = fs.readFileSync(r2r.loki.filename);
         const sourceH = SparkMD5.ArrayBuffer.hash(data);
@@ -650,8 +720,8 @@ export default class R2r {
                 h: sourceH,
                 created: now
             });
-        } catch(e) {
-            if (callback) callback({text: "Duplicated Anki resource"});
+        } catch (e) {
+            if (callback) callback({ text: "Duplicated Anki resource" });
             return;
         }
 
@@ -661,7 +731,7 @@ export default class R2r {
                     ...m,
                     sourceId: sourceH
                 });
-            } catch(e) {}
+            } catch (e) { }
         });
 
         const deckIdMap: Record<string, string> = {};
@@ -674,8 +744,8 @@ export default class R2r {
                     _id
                 });
                 deckIdMap[d.name] = _id;
-            } catch(e) {
-                deckIdMap[d.name] = this.deck.findOne({name: d.name})._id;
+            } catch (e) {
+                deckIdMap[d.name] = this.deck.findOne({ name: d.name })._id;
             }
         });
 
@@ -685,27 +755,27 @@ export default class R2r {
                     ...t,
                     name: `${sourceH}/${t.name}`
                 });
-            } catch(e) {}
+            } catch (e) { }
         })
 
         r2r.note.find().forEach((n) => {
             try {
                 this.note.insertOne(n);
-            } catch(e) {}
+            } catch (e) { }
         });
 
         r2r.card.find().forEach((c) => {
             try {
                 this.card.insertOne(c);
-            } catch(e) {}
+            } catch (e) { }
         });
     }
 
-    public async fromAnki(anki: Anki, options?: {filename?: string, callback?: (p: IProgress) => void}) {
+    public async fromAnki(anki: Anki, options?: { filename?: string, callback?: (p: IProgress) => void }) {
         const filename = options ? options.filename : undefined;
         const callback = options ? options.callback : undefined;
 
-        if (callback) callback({text: "Reading Anki file"});
+        if (callback) callback({ text: "Reading Anki file" });
 
         const data = fs.readFileSync(anki.filePath);
         const sourceH = SparkMD5.ArrayBuffer.hash(data);
@@ -717,8 +787,8 @@ export default class R2r {
                 h: sourceH,
                 created: now
             });
-        } catch(e) {
-            if (callback) callback({text: "Duplicated Anki resource"});
+        } catch (e) {
+            if (callback) callback({ text: "Duplicated Anki resource" });
             return;
         }
 
@@ -729,7 +799,7 @@ export default class R2r {
         current = 0;
         max = media.length;
         for (const el of media) {
-            if (callback) callback({text: "Inserting media", current, max});
+            if (callback) callback({ text: "Inserting media", current, max });
 
             try {
                 this.media.insertOne({
@@ -738,7 +808,7 @@ export default class R2r {
                     data: el.data,
                     sourceId: sourceH
                 })
-            } catch(e) {}
+            } catch (e) { }
 
             current++;
         }
@@ -752,7 +822,7 @@ export default class R2r {
         max = card.length;
 
         for (const c of chunk(card, 1000)) {
-            if (callback) callback({text: "Inserting cards", current, max});
+            if (callback) callback({ text: "Inserting cards", current, max });
 
             for (const el of c) {
                 if (!Object.keys(deckIdMap).includes(el.deck.name)) {
