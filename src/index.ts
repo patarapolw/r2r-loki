@@ -468,8 +468,6 @@ export default class R2rLoki extends R2rLocal {
       return c1;
     });
 
-    console.log(cs);
-
     for (const c of cs) {
       if (Object.keys(c).length > 1) {
         this.card.findAndUpdate({ _id: c._id }, (c0) => {
